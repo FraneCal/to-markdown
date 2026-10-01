@@ -1,0 +1,52 @@
+// Runs Microsoft MarkItDown in the browser via Pyodide. Files never leave the device.
+const PYODIDE_URL = "https://cdn.jsdelivr.net/pyodide/v0.29.3/full/";
+importScripts(PYODIDE_URL + "pyodide.js");
+
+// Shipped with Pyodide
+const PYODIDE_PACKAGES = [
+  "micropip", "beautifulsoup4", "lxml", "pandas", "xlrd", "pillow",
+  "cryptography", "requests", "charset-normalizer",
+];
+// Pure-Python wheels from PyPI
+const PYPI_PACKAGES = [
+  "markdownify==1.2.3", "defusedxml==0.7.1", "mammoth==1.11.0",
+  "python-pptx==1.0.2", "openpyxl==3.1.5", "olefile==0.47",
+  "pdfminer.six==20260107",
+];
+// Installed without dependencies: magika (onnxruntime) and pypdfium2 have no
+// browser builds, and MarkItDown works without them (see converter.py).
+const PYPI_PACKAGES_NO_DEPS = ["pdfplumber==0.11.10", "markitdown==0.1.8"];
+
+const status = (text) => postMessage({ type: "status", text });
+
+const ready = (async () => {
+  status("Loading Python runtime…");
+  const pyodide = await loadPyodide({ indexURL: PYODIDE_URL });
+  status("Loading converters…");
+  await pyodide.loadPackage(PYODIDE_PACKAGES);
+  const micropip = pyodide.pyimport("micropip");
+  await micropip.install(PYPI_PACKAGES);
+  await micropip.install.callKwargs(PYPI_PACKAGES_NO_DEPS, { deps: false });
+  status("Starting MarkItDown…");
+  const source = await (await fetch("converter.py")).text();
+  pyodide.runPython(source);
+  return pyodide.globals.get("convert");
+})();
+
+ready.then(
+  () => postMessage({ type: "ready" }),
+  (err) => postMessage({ type: "fatal", error: String(err) }),
+);
+
+onmessage = async ({ data: { id, name, buffer } }) => {
+  try {
+    const convert = await ready;
+    const markdown = convert(new Uint8Array(buffer), name);
+    postMessage({ type: "result", id, markdown });
+  } catch (err) {
+    // Last line of a Python traceback is the human-readable part
+    const lines = String(err.message || err).trim().split("\n");
+    const error = lines[lines.length - 1].replace(/^[\w.]+(Error|Exception): /, "");
+    postMessage({ type: "error", id, error });
+  }
+};

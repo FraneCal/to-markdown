@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anything → Markdown</title>
+<meta name="description" content="Convert PDF, Word, Excel, PowerPoint, HTML and more to Markdown in your browser. Powered by Microsoft MarkItDown.">
+<style>
+  :root {
+    --bg: #f6f5f1; --card: #ffffff; --text: #1c1b19; --muted: #6b6861;
+    --line: #dedbd3; --accent: #1f6f5c; --accent-text: #ffffff; --error: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161614; --card: #201f1d; --text: #ecebe6; --muted: #9c9990;
+      --line: #36342f; --accent: #58c2a6; --accent-text: #10201c; --error: #f2877f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 48px 16px 64px; }
+  h1 { font-size: 1.9rem; margin: 0 0 4px; letter-spacing: -0.02em; }
+  .lead { color: var(--muted); margin: 0 0 28px; }
+  a { color: var(--accent); }
+
+  #drop {
+    display: block; border: 2px dashed var(--line); border-radius: 14px;
+    background: var(--card); padding: 44px 20px; text-align: center; cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  #drop:hover, #drop.over, #drop:focus-within { border-color: var(--accent); }
+  #drop.over { background: color-mix(in srgb, var(--accent) 8%, var(--card)); }
+  #drop strong { display: block; font-size: 1.1rem; }
+  #drop span { color: var(--muted); font-size: .9rem; }
+  #drop input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+
+  #status { color: var(--muted); font-size: .9rem; margin: 12px 2px; min-height: 1.4em; }
+  #status.error { color: var(--error); }
+
+  .toolbar { display: flex; gap: 8px; align-items: center; margin: 20px 0 10px; }
+  .toolbar[hidden] { display: none; }
+  .toolbar .total { margin-right: auto; color: var(--muted); font-size: .9rem; }
+
+  button {
+    font: inherit; font-size: .85rem; padding: 6px 12px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--card); color: var(--text);
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+
+  .file {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 12px 14px; margin-bottom: 10px;
+  }
+  .file header { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .file .name { font-weight: 600; overflow-wrap: anywhere; }
+  .file .meta { color: var(--muted); font-size: .85rem; margin-right: auto; }
+  .file.failed .meta { color: var(--error); }
+  .file pre {
+    margin: 10px 0 0; padding: 10px 12px; max-height: 320px; overflow: auto;
+    background: var(--bg); border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere;
+    font: 13px/1.5 ui-monospace, Consolas, Menlo, monospace;
+  }
+  footer { color: var(--muted); font-size: .85rem; margin-top: 32px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Anything → Markdown</h1>
+  <p class="lead">Drop in documents, get clean Markdown that costs far fewer tokens to feed to an AI.</p>
+
+  <label id="drop">
+    <input id="picker" type="file" multiple>
+    <strong>Drop files here or click to choose</strong>
+    <span>PDF, Word, Excel, PowerPoint, HTML, CSV, JSON, XML, EPUB, ZIP, text and code files</span>
+  </label>
+  <p id="status" role="status">Starting…</p>
+
+  <div class="toolbar" id="toolbar" hidden>
+    <span class="total" id="total"></span>
+    <button id="copy-all">Copy all</button>
+    <button id="download-all">Download all</button>
+    <button id="clear">Clear</button>
+  </div>
+  <div id="files"></div>
+
+  <footer>
+    Everything runs in your browser — files are never uploaded.
+    Powered by <a href="https://github.com/microsoft/markitdown">Microsoft MarkItDown</a>.
+    Images and audio are not transcribed.
+  </footer>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const statusEl = $("status"), filesEl = $("files"), drop = $("drop");
+const worker = new Worker("worker.js");
+const items = new Map(); // id -> { name, el, markdown }
+let nextId = 0, pending = 0, engineReady = false;
+
+const tokens = (text) => Math.ceil(text.length / 4); // rough estimate
+const fmt = (n) => n.toLocaleString("en-US");
+
+function setStatus(text, isError = false) {
+  statusEl.textContent = text;
+  statusEl.classList.toggle("error", isError);
+}
+
+function refresh() {
+  const done = [...items.values()].filter((i) => i.markdown);
+  $("toolbar").hidden = items.size === 0;
+  const total = done.reduce((sum, i) => sum + tokens(i.markdown), 0);
+  $("total").textContent = done.length
+    ? `${done.length} file${done.length > 1 ? "s" : ""} · ~${fmt(total)} tokens` : "";
+  if (engineReady) {
+    setStatus(pending ? `Converting ${pending} file${pending > 1 ? "s" : ""}…` : "Ready.");
+  }
+}
+
+function button(label, onClick, className = "") {
+  const b = document.createElement("button");
+  b.textContent = label;
+  b.className = className;
+  b.addEventListener("click", () => onClick(b));
+  return b;
+}
+
+async function copy(text, btn) {
+  await navigator.clipboard.writeText(text);
+  const label = btn.textContent;
+  btn.textContent = "Copied";
+  setTimeout(() => (btn.textContent = label), 1200);
+}
+
+function download(text, filename) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type: "text/markdown" }));
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+const mdName = (name) => name.replace(/\.[^.]+$/, "") + ".md";
+const combined = () => [...items.values()].filter((i) => i.markdown)
+  .map((i) => `# ${i.name}\n\n${i.markdown}`).join("\n\n---\n\n");
+
+async function addFiles(fileList) {
+  for (const file of fileList) {
+    const id = nextId++;
+    const el = document.createElement("section");
+    el.className = "file";
+    const header = document.createElement("header");
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = file.name;
+    const meta = document.createElement("span");
+    meta.className = "meta";
+    meta.textContent = "Converting…";
+    header.append(name, meta);
+    el.append(header);
+    filesEl.prepend(el);
+    items.set(id, { name: file.name, el, markdown: null });
+    pending++;
+    const buffer = await file.arrayBuffer();
+    worker.postMessage({ id, name: file.name, buffer }, [buffer]);
+  }
+  refresh();
+}
+
+worker.onmessage = ({ data }) => {
+  if (data.type === "status") return setStatus(data.text);
+  if (data.type === "ready") { engineReady = true; return refresh(); }
+  if (data.type === "fatal") {
+    return setStatus("Could not load the converter. Check your connection and reload. " + data.error, true);
+  }
+  const item = items.get(data.id);
+  pending--;
+  if (!item) return refresh(); // cleared while converting
+  const header = item.el.querySelector("header");
+  const meta = item.el.querySelector(".meta");
+  if (data.type === "error") {
+    item.el.classList.add("failed");
+    meta.textContent = data.error;
+  } else {
+    item.markdown = data.markdown;
+    meta.textContent = `~${fmt(tokens(data.markdown))} tokens`;
+    header.append(
+      button("Copy", (b) => copy(item.markdown, b), "primary"),
+      button("Download", () => download(item.markdown, mdName(item.name))),
+    );
+    const pre = document.createElement("pre");
+    pre.textContent = data.markdown;
+    item.el.append(pre);
+  }
+  refresh();
+};
+worker.onerror = (e) => setStatus("Converter crashed: " + e.message, true);
+
+$("picker").addEventListener("change", (e) => { addFiles(e.target.files); e.target.value = ""; });
+$("copy-all").addEventListener("click", (e) => copy(combined(), e.target));
+$("download-all").addEventListener("click", () => download(combined(), "converted.md"));
+$("clear").addEventListener("click", () => { items.clear(); filesEl.replaceChildren(); refresh(); });
+
+// Accept drops anywhere on the page
+addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+addEventListener("dragleave", (e) => { if (!e.relatedTarget) drop.classList.remove("over"); });
+addEventListener("drop", (e) => {
+  e.preventDefault();
+  drop.classList.remove("over");
+  addFiles(e.dataTransfer.files);
+});
+</script>
+</body>
+</html>
