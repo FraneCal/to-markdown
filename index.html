@@ -145,7 +145,6 @@
 <script>
 const $ = (id) => document.getElementById(id);
 const statusEl = $("status"), filesEl = $("files"), drop = $("drop");
-const worker = new Worker("worker.js");
 const items = new Map(); // id -> { name, size, el, markdown }
 let nextId = 0, pending = 0, engineReady = false, loadStep = 0;
 
@@ -239,62 +238,172 @@ async function addFiles(fileList) {
     items.set(id, { name: file.name, size: file.size, el, markdown: null });
     pending++;
     refresh();
-    const buffer = await file.arrayBuffer();
-    worker.postMessage({ id, name: file.name, buffer }, [buffer]);
+    const onPages = (done, total) => {
+      if (items.has(id)) meta.textContent = `Converting… page ${fmt(done)} of ${fmt(total)}`;
+    };
+    file.arrayBuffer()
+      .then((buffer) => convertFile(id, file.name, buffer, onPages))
+      .then((markdown) => showResult(id, markdown), (err) => showError(id, err.message))
+      .finally(() => { pending--; refresh(); });
   }
 }
 
-worker.onmessage = ({ data }) => {
-  if (data.type === "status") {
-    loadStep = data.step;
-    $("progress").value = data.step - 0.5;
-    return refresh();
-  }
-  if (data.type === "ready") {
-    engineReady = true;
-    $("loading").hidden = true;
-    for (const item of items.values()) {
-      if (!item.markdown && !item.el.classList.contains("failed")) {
-        item.el.querySelector(".meta").textContent = "Converting…";
-      }
-    }
-    return refresh();
-  }
-  if (data.type === "fatal") {
-    $("loading").hidden = true;
-    console.error(data.error);
-    return setStatus("The converter could not load. Check the internet connection, then reload this page.", true);
-  }
-  const item = items.get(data.id);
-  pending--;
-  if (!item) return refresh(); // removed while converting
-  const header = item.el.querySelector("header");
+function showError(id, message) {
+  const item = items.get(id);
+  if (!item) return; // removed while converting
+  item.el.classList.add("failed");
+  item.el.querySelector(".meta").textContent = "Not converted. " + message;
+}
+
+function showResult(id, markdown) {
+  const item = items.get(id);
+  if (!item) return; // removed while converting
   const meta = item.el.querySelector(".meta");
-  if (data.type === "error") {
-    item.el.classList.add("failed");
-    meta.textContent = "Not converted. " + data.error;
-  } else {
-    item.markdown = data.markdown;
-    meta.classList.add("mono");
-    meta.textContent =
-      `${fmtBytes(item.size)} → ${fmtBytes(byteSize(data.markdown))} · about ${plural(tokens(data.markdown), "token")}`;
-    header.lastChild.before(
-      button("Copy", `Copy ${item.name} as Markdown`, (b) => copy(item.markdown, b)),
-      button("Download", `Download ${mdName(item.name)}`, () => download(item.markdown, mdName(item.name))),
-    );
-    const pre = document.createElement("pre");
-    pre.className = "mono";
-    pre.tabIndex = 0; // scrollable region must be reachable by keyboard
-    pre.setAttribute("aria-label", `Markdown for ${item.name}`);
-    pre.textContent = data.markdown;
-    item.el.append(pre);
+  item.markdown = markdown;
+  meta.classList.add("mono");
+  meta.textContent =
+    `${fmtBytes(item.size)} → ${fmtBytes(byteSize(markdown))} · about ${plural(tokens(markdown), "token")}`;
+  item.el.querySelector("header").lastChild.before(
+    button("Copy", `Copy ${item.name} as Markdown`, (b) => copy(item.markdown, b)),
+    button("Download", `Download ${mdName(item.name)}`, () => download(item.markdown, mdName(item.name))),
+  );
+  const pre = document.createElement("pre");
+  pre.className = "mono";
+  pre.tabIndex = 0; // scrollable region must be reachable by keyboard
+  pre.setAttribute("aria-label", `Markdown for ${item.name}`);
+  pre.textContent = markdown;
+  item.el.append(pre);
+}
+
+// --- Workers ---------------------------------------------------------------
+// Each worker runs its own copy of the converter. The primary one loads with
+// the page; helpers start only when a long PDF arrives, so its pages can be
+// converted on several CPU cores at once.
+const POOL_SIZE = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1));
+const PARALLEL_MIN_PAGES = 24, PAGES_PER_JOB = 4;
+const STOPPED = "The converter stopped working. Reload this page and try again.";
+let nextJob = 0;
+
+function startWorker(onStatus) {
+  const w = { worker: new Worker("worker.js"), jobs: new Map() };
+  w.ready = new Promise((resolve, reject) => {
+    w.worker.onmessage = ({ data }) => {
+      if (data.type === "status") return onStatus && onStatus(data.step);
+      if (data.type === "ready") return resolve();
+      if (data.type === "fatal") return reject(new Error(data.error));
+      const job = w.jobs.get(data.job);
+      w.jobs.delete(data.job);
+      if (data.type === "error") job.reject(new Error(data.error));
+      else job.resolve(data.result);
+    };
+    w.worker.onerror = (e) => {
+      console.error(e.message);
+      reject(new Error(e.message));
+      for (const job of w.jobs.values()) job.reject(new Error(STOPPED));
+      w.jobs.clear();
+    };
+  });
+  w.ready.catch(() => {});
+  return w;
+}
+
+// Run one converter.py function in a worker
+function call(w, fn, ...args) {
+  return new Promise((resolve, reject) => {
+    const job = nextJob++;
+    w.jobs.set(job, { resolve, reject });
+    w.worker.postMessage({ job, fn, args });
+  });
+}
+
+const primary = startWorker((step) => {
+  loadStep = step;
+  $("progress").value = step - 0.5;
+  refresh();
+});
+const helpers = [];
+function pool() {
+  while (helpers.length < POOL_SIZE - 1) helpers.push(startWorker());
+  return helpers;
+}
+
+primary.ready.then(() => {
+  engineReady = true;
+  $("loading").hidden = true;
+  for (const item of items.values()) {
+    if (!item.markdown && !item.el.classList.contains("failed")) {
+      item.el.querySelector(".meta").textContent = "Converting…";
+    }
   }
   refresh();
-};
-worker.onerror = (e) => {
-  console.error(e.message);
-  setStatus("The converter stopped working. Reload this page and try again.", true);
-};
+}, (err) => {
+  $("loading").hidden = true;
+  console.error(err);
+  setStatus("The converter could not load. Check the internet connection, then reload this page.", true);
+});
+
+async function convertFile(id, name, buffer, onPages) {
+  try {
+    await primary.ready;
+  } catch {
+    throw new Error("The converter could not load.");
+  }
+  if (/\.pdf$/i.test(name)) {
+    try {
+      return await convertPdf(id, buffer, onPages);
+    } catch (err) {
+      if (/^No text was found/.test(err.message)) throw err;
+      console.warn("Page-range PDF conversion failed, converting in one piece.", err);
+    }
+  }
+  return call(primary, "convert", buffer, name);
+}
+
+async function convertPdf(id, buffer, onPages) {
+  const key = `pdf${id}`;
+  const opened = [primary];
+  try {
+    const total = await call(primary, "pdf_open", key, buffer);
+    const jobs = [];
+    for (let start = 0; start < total; start += PAGES_PER_JOB) {
+      jobs.push([start, Math.min(start + PAGES_PER_JOB, total)]);
+    }
+    const results = new Array(jobs.length);
+    let next = 0, done = 0;
+    // Workers take the next page range whenever they are free
+    const work = async (w) => {
+      while (next < jobs.length) {
+        const j = next++;
+        results[j] = await call(w, "pdf_pages", key, ...jobs[j]);
+        done += jobs[j][1] - jobs[j][0];
+        onPages(done, total);
+      }
+    };
+    const join = async (w) => {
+      try { await w.ready; } catch { return; } // a helper that fails to load is skipped
+      if (next >= jobs.length) return;
+      opened.push(w);
+      await call(w, "pdf_open", key, buffer);
+      await work(w);
+    };
+    const team = total >= PARALLEL_MIN_PAGES ? pool() : [];
+    await Promise.all([work(primary), ...team.map(join)]);
+
+    const pages = results.flat(); // [isTablePage, markdown] per page
+    let text = pages.some((p) => p[0]) ? pages.map((p) => p[1]).filter(Boolean).join("\n\n") : "";
+    if (!text.trim()) {
+      // No table pages: MarkItDown uses plain text extraction for the whole document
+      const size = Math.ceil(total / opened.length);
+      const parts = await Promise.all(opened.map((w, i) =>
+        i * size < total ? call(w, "pdf_text", key, i * size, Math.min((i + 1) * size, total)) : ""));
+      text = parts.join("");
+    }
+    return await call(primary, "pdf_finish", text);
+  } finally {
+    for (const w of opened) call(w, "pdf_close", key).catch(() => {});
+  }
+}
+// ---------------------------------------------------------------------------
 
 $("picker").addEventListener("change", (e) => { addFiles(e.target.files); e.target.value = ""; });
 $("copy-all").addEventListener("click", (e) => copy(combined(), e.target));

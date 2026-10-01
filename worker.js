@@ -32,7 +32,7 @@ const ready = (async () => {
   status(4);
   const source = await (await fetch("converter.py")).text();
   pyodide.runPython(source);
-  return pyodide.globals.get("convert");
+  return pyodide;
 })();
 
 ready.then(
@@ -40,15 +40,22 @@ ready.then(
   (err) => postMessage({ type: "fatal", error: String(err) }),
 );
 
-onmessage = async ({ data: { id, name, buffer } }) => {
+// Each message calls one function from converter.py: { job, fn, args }
+onmessage = async ({ data: { job, fn, args } }) => {
   try {
-    const convert = await ready;
-    const markdown = convert(new Uint8Array(buffer), name);
-    postMessage({ type: "result", id, markdown });
+    const pyodide = await ready;
+    const pyArgs = args.map((a) => (a instanceof ArrayBuffer ? new Uint8Array(a) : a));
+    let result = pyodide.globals.get(fn)(...pyArgs);
+    if (result && typeof result.toJs === "function") {
+      const proxy = result;
+      result = proxy.toJs();
+      proxy.destroy();
+    }
+    postMessage({ type: "result", job, result });
   } catch (err) {
     // Last line of a Python traceback is the human-readable part
     const lines = String(err.message || err).trim().split("\n");
     const error = lines[lines.length - 1].replace(/^[\w.]+(Error|Exception): /, "");
-    postMessage({ type: "error", id, error });
+    postMessage({ type: "error", job, error });
   }
 };
