@@ -30,7 +30,7 @@ const ready = (async () => {
   await micropip.install(PYPI_PACKAGES);
   await micropip.install.callKwargs(PYPI_PACKAGES_NO_DEPS, { deps: false });
   status(4);
-  const source = await (await fetch("converter.py")).text();
+  const source = await (await fetch("converter.py" + self.location.search)).text();
   pyodide.runPython(source);
   return pyodide;
 })();

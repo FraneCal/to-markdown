@@ -281,11 +281,12 @@ function showResult(id, markdown) {
 // converted on several CPU cores at once.
 const POOL_SIZE = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1));
 const PARALLEL_MIN_PAGES = 24, PAGES_PER_JOB = 4;
+const VERSION = "3"; // raise when worker.js or converter.py change, so browsers reload them
 const STOPPED = "The converter stopped working. Reload this page and try again.";
 let nextJob = 0;
 
 function startWorker(onStatus) {
-  const w = { worker: new Worker("worker.js"), jobs: new Map() };
+  const w = { worker: new Worker("worker.js?v=" + VERSION), jobs: new Map() };
   w.ready = new Promise((resolve, reject) => {
     w.worker.onmessage = ({ data }) => {
       if (data.type === "status") return onStatus && onStatus(data.step);
@@ -342,21 +343,104 @@ primary.ready.then(() => {
   setStatus("The converter could not load. Check the internet connection, then reload this page.", true);
 });
 
-async function convertFile(id, name, buffer, onPages) {
+async function whenLoaded() {
   try {
     await primary.ready;
   } catch {
     throw new Error("The converter could not load.");
   }
+}
+
+async function convertFile(id, name, buffer, onPages) {
   if (/\.pdf$/i.test(name)) {
-    try {
-      return await convertPdf(id, buffer, onPages);
-    } catch (err) {
-      if (/^No text was found/.test(err.message)) throw err;
-      console.warn("Page-range PDF conversion failed, converting in one piece.", err);
+    // Fastest first: pdf.js reads the text, MarkItDown lays out the tables.
+    // If that fails, MarkItDown reads the PDF itself (slower).
+    const attempts = [
+      async () => {
+        const pages = await readPdfWords(buffer.slice(0), onPages);
+        await whenLoaded();
+        return call(primary, "pdf_from_words", JSON.stringify(pages));
+      },
+      async () => { await whenLoaded(); return convertPdf(id, buffer, onPages); },
+    ];
+    for (const attempt of attempts) {
+      try {
+        return await attempt();
+      } catch (err) {
+        if (/^(No text was found|The converter could not load)/.test(err.message)) throw err;
+        console.warn("PDF conversion attempt failed, trying the next method.", err);
+      }
     }
   }
+  await whenLoaded();
   return call(primary, "convert", buffer, name);
+}
+
+// --- PDF text through pdf.js -------------------------------------------------
+const PDFJS_URL = "https://cdn.jsdelivr.net/npm/pdfjs-dist@5.7.284/";
+let pdfjsLoading;
+function loadPdfjs() {
+  pdfjsLoading ||= import(PDFJS_URL + "legacy/build/pdf.min.mjs").then((pdfjs) => {
+    pdfjs.GlobalWorkerOptions.workerSrc = PDFJS_URL + "legacy/build/pdf.worker.min.mjs";
+    return pdfjs;
+  });
+  return pdfjsLoading;
+}
+
+// Returns [{ width, words: [[text, x0, x1, top, bottom], ...] }] per page, with
+// words built the way pdfplumber builds them for MarkItDown: text on one line
+// stays one word until there is a gap wider than 3 points.
+async function readPdfWords(data, onPages) {
+  const WORD_GAP = 3;
+  const pdfjs = await loadPdfjs();
+  const doc = await pdfjs.getDocument({ data, cMapUrl: PDFJS_URL + "cmaps/", cMapPacked: true }).promise;
+  try {
+    const pages = [];
+    for (let n = 1; n <= doc.numPages; n++) {
+      const page = await doc.getPage(n);
+      const viewport = page.getViewport({ scale: 1 });
+      const { items } = await page.getTextContent();
+      const words = [];
+      let word = null; // [text, x0, x1, top, bottom]
+      let baseline = 0; // of the last run added to the word, so curved text still joins
+      const flush = () => {
+        if (word && word[0].trim()) words.push(word);
+        word = null;
+      };
+      for (const item of items) {
+        if (!item.str) continue; // line-break marker
+        const t = pdfjs.Util.transform(viewport.transform, item.transform);
+        const size = Math.hypot(t[2], t[3]);
+        const upright = Math.abs(t[1]) < Math.abs(t[0]);
+        const x0 = t[4], x1 = x0 + (upright ? item.width : size);
+        if (!item.str.trim()) {
+          // pdf.js reports a gap between runs as a space as wide as the gap
+          if (word && item.width <= WORD_GAP) { word[0] += " "; word[2] = Math.max(word[2], x1); }
+          else flush();
+          continue;
+        }
+        // pdfminer places a glyph box from the descent (about 0.2 of the size) upward
+        const top = t[5] - 0.8 * size, bottom = t[5] + 0.2 * size;
+        const gap = word ? x0 - word[2] : Infinity;
+        if (word && upright && Math.abs(t[5] - baseline) <= 3 && gap <= WORD_GAP && gap > -size) {
+          word[0] += item.str;
+          word[2] = Math.max(word[2], x1);
+        } else {
+          flush();
+          word = [item.str, x0, x1, top, bottom];
+          if (!upright) flush();
+        }
+        baseline = t[5];
+      }
+      flush();
+      pages.push({ width: viewport.width, words });
+      page.cleanup();
+      onPages(n, doc.numPages);
+    }
+    return pages;
+  } finally {
+    doc.destroy();
+  }
 }
 
 async function convertPdf(id, buffer, onPages) {

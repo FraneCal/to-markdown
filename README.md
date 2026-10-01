@@ -4,11 +4,15 @@ A static website that converts documents (PDF, Word, Excel, PowerPoint, HTML, CS
 
 It runs [Microsoft MarkItDown](https://github.com/microsoft/markitdown) entirely in the browser through [Pyodide](https://pyodide.org). Files are never uploaded anywhere.
 
+PDFs take a faster route: [pdf.js](https://mozilla.github.io/pdf.js/) reads the text and its position on the page, and MarkItDown's own table detection turns that into Markdown. If pdf.js cannot read a file, MarkItDown reads the PDF itself, which is slower.
+
 ## Files
 
-- `index.html`: the page and UI
+- `index.html`: the page, UI and PDF text reading
 - `worker.js`: web worker that loads Pyodide and installs MarkItDown
 - `converter.py`: Python glue executed inside Pyodide
+
+After changing `worker.js` or `converter.py`, raise `VERSION` in `index.html` so browsers load the new files.
 
 ## Run locally
 
