@@ -17,17 +17,19 @@ const PYPI_PACKAGES = [
 // browser builds, and MarkItDown works without them (see converter.py).
 const PYPI_PACKAGES_NO_DEPS = ["pdfplumber==0.11.10", "markitdown==0.1.8"];
 
-const status = (text) => postMessage({ type: "status", text });
+// Four loading steps, reported so the page can show determinate progress
+const status = (step) => postMessage({ type: "status", step });
 
 const ready = (async () => {
-  status("Loading Python runtime…");
+  status(1);
   const pyodide = await loadPyodide({ indexURL: PYODIDE_URL });
-  status("Loading converters…");
+  status(2);
   await pyodide.loadPackage(PYODIDE_PACKAGES);
   const micropip = pyodide.pyimport("micropip");
+  status(3);
   await micropip.install(PYPI_PACKAGES);
   await micropip.install.callKwargs(PYPI_PACKAGES_NO_DEPS, { deps: false });
-  status("Starting MarkItDown…");
+  status(4);
   const source = await (await fetch("converter.py")).text();
   pyodide.runPython(source);
   return pyodide.globals.get("convert");

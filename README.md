@@ -6,9 +6,9 @@ It runs [Microsoft MarkItDown](https://github.com/microsoft/markitdown) entirely
 
 ## Files
 
-- `index.html` – the page and UI
-- `worker.js` – web worker that loads Pyodide and installs MarkItDown
-- `converter.py` – Python glue executed inside Pyodide
+- `index.html`: the page and UI
+- `worker.js`: web worker that loads Pyodide and installs MarkItDown
+- `converter.py`: Python glue executed inside Pyodide
 
 ## Run locally
 

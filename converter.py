@@ -49,7 +49,15 @@ def convert(data, filename):
         # Unknown extension (source code, logs, ...): fall back to plain text.
         text = _as_text(raw)
         if text is None:
-            raise ValueError("This file type is not supported.") from None
+            raise ValueError(
+                "This file type can't be read. Try a PDF, Office document, web page or text file."
+            ) from None
+    except Exception:
+        raise ValueError(
+            "This file can't be opened. It may be damaged or password protected."
+        ) from None
     if not text.strip():
-        raise ValueError("No text could be extracted from this file.")
+        raise ValueError(
+            "No text was found. Images, audio and scanned pages can't be converted."
+        )
     return text.strip() + "\n"

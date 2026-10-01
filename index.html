@@ -5,92 +5,140 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Anything → Markdown</title>
 <meta name="description" content="Convert PDF, Word, Excel, PowerPoint, HTML and more to Markdown in your browser. Powered by Microsoft MarkItDown.">
+<meta name="color-scheme" content="light dark">
 <style>
+  /* Colors are named by role. Accent means "you can act on this" and nothing else. */
   :root {
-    --bg: #f6f5f1; --card: #ffffff; --text: #1c1b19; --muted: #6b6861;
-    --line: #dedbd3; --accent: #1f6f5c; --accent-text: #ffffff; --error: #b3261e;
+    --bg: #f5f5f7; --surface: #ffffff; --well: #f5f5f7;
+    --text: #1d1d1f; --muted: #5f5f66;
+    --line: #d2d2d7; --line-strong: #86868b;
+    --accent: #0a5fd1; --accent-text: #ffffff; --error: #b3261e;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #161614; --card: #201f1d; --text: #ecebe6; --muted: #9c9990;
-      --line: #36342f; --accent: #58c2a6; --accent-text: #10201c; --error: #f2877f;
+      --bg: #111113; --surface: #1c1c1f; --well: #111113;
+      --text: #f2f2f4; --muted: #a3a3ab;
+      --line: #38383d; --line-strong: #7c7c84;
+      --accent: #6cb0ff; --accent-text: #06213f; --error: #ff8a80;
     }
   }
+  @media (prefers-contrast: more) {
+    :root { --muted: var(--text); --line: var(--line-strong); --line-strong: var(--text); }
+  }
+
   * { box-sizing: border-box; }
   body {
     margin: 0; background: var(--bg); color: var(--text);
-    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font: 1rem/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   }
-  main { max-width: 760px; margin: 0 auto; padding: 48px 16px 64px; }
-  h1 { font-size: 1.9rem; margin: 0 0 4px; letter-spacing: -0.02em; }
-  .lead { color: var(--muted); margin: 0 0 28px; }
-  a { color: var(--accent); }
+  main { max-width: 46rem; margin: 0 auto; padding: 3.5rem 1rem 4rem; }
+  .mono { font-family: ui-monospace, "SF Mono", Consolas, Menlo, monospace; }
 
+  h1 { font-size: clamp(1.6rem, 5vw, 2.1rem); line-height: 1.2; margin: 0 0 .4rem; letter-spacing: -0.02em; }
+  h1 .mono { color: var(--muted); font-weight: 400; margin-right: .15em; }
+  .lead { color: var(--muted); margin: 0 0 1.75rem; max-width: 34rem; text-wrap: balance; }
+  a { color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* Buttons */
+  button, .button {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-height: 2rem; padding: .3rem .8rem; border-radius: .5rem; cursor: pointer;
+    font: inherit; font-size: .875rem; white-space: nowrap;
+    border: 1px solid var(--line); background: var(--surface); color: var(--text);
+    transition: border-color .15s;
+  }
+  button:hover, .button:hover { border-color: var(--line-strong); }
+  .prominent, .prominent:hover {
+    background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600;
+  }
+  .prominent:hover { filter: brightness(1.08); }
+  @media (pointer: coarse) {
+    button, .button { min-height: 2.75rem; padding-inline: 1rem; }
+  }
+
+  /* Drop zone */
   #drop {
-    display: block; border: 2px dashed var(--line); border-radius: 14px;
-    background: var(--card); padding: 44px 20px; text-align: center; cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; gap: .6rem;
+    border: 1.5px dashed var(--line-strong); border-radius: 1rem;
+    background: var(--surface); padding: 2.5rem 1.25rem; text-align: center; cursor: pointer;
     transition: border-color .15s, background .15s;
   }
-  #drop:hover, #drop.over, #drop:focus-within { border-color: var(--accent); }
-  #drop.over { background: color-mix(in srgb, var(--accent) 8%, var(--card)); }
-  #drop strong { display: block; font-size: 1.1rem; }
-  #drop span { color: var(--muted); font-size: .9rem; }
+  #drop.over { border-style: solid; border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); }
+  #drop:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
   #drop input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  #drop .button { min-height: 2.75rem; padding-inline: 1.4rem; font-size: 1rem; }
+  #drop .hint, #drop .formats { color: var(--muted); font-size: .875rem; }
+  #drop .formats { max-width: 30rem; text-wrap: balance; }
+  @media (hover: none) { #drop .hint { display: none; } }
 
-  #status { color: var(--muted); font-size: .9rem; margin: 12px 2px; min-height: 1.4em; }
+  /* Loading and status */
+  #loading { margin: .9rem .1rem 0; }
+  #loading[hidden] { display: none; }
+  progress { display: block; width: 100%; height: .35rem; accent-color: var(--accent); }
+  #status { color: var(--muted); font-size: .875rem; margin: .5rem .1rem 0; min-height: 1.4em; }
   #status.error { color: var(--error); }
 
-  .toolbar { display: flex; gap: 8px; align-items: center; margin: 20px 0 10px; }
+  /* Results */
+  .toolbar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin: 1.75rem 0 .75rem; }
   .toolbar[hidden] { display: none; }
-  .toolbar .total { margin-right: auto; color: var(--muted); font-size: .9rem; }
-
-  button {
-    font: inherit; font-size: .85rem; padding: 6px 12px; border-radius: 8px; cursor: pointer;
-    border: 1px solid var(--line); background: var(--card); color: var(--text);
-  }
-  button:hover { border-color: var(--accent); }
-  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  .toolbar .total { margin-right: auto; color: var(--muted); font-size: .875rem; }
 
   .file {
-    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
-    padding: 12px 14px; margin-bottom: 10px;
+    background: var(--surface); border: 1px solid var(--line); border-radius: .85rem;
+    padding: .85rem 1rem; margin-bottom: .65rem;
   }
-  .file header { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .file header { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+  .file .info { margin-right: auto; min-width: 12rem; flex: 1; }
   .file .name { font-weight: 600; overflow-wrap: anywhere; }
-  .file .meta { color: var(--muted); font-size: .85rem; margin-right: auto; }
+  .file .meta { color: var(--muted); font-size: .8125rem; }
   .file.failed .meta { color: var(--error); }
   .file pre {
-    margin: 10px 0 0; padding: 10px 12px; max-height: 320px; overflow: auto;
-    background: var(--bg); border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere;
-    font: 13px/1.5 ui-monospace, Consolas, Menlo, monospace;
+    margin: .75rem 0 0; padding: .7rem .85rem; max-height: 20rem; overflow: auto;
+    background: var(--well); border-radius: .5rem; white-space: pre-wrap; overflow-wrap: anywhere;
+    font-size: .8125rem; line-height: 1.55;
   }
-  footer { color: var(--muted); font-size: .85rem; margin-top: 32px; }
+
+  @media (max-width: 30rem) {
+    /* Keep each row's actions together on their own line */
+    .file .info, .toolbar .total { flex-basis: 100%; }
+  }
+
+  footer { color: var(--muted); font-size: .8125rem; margin-top: 2.5rem; }
+  footer p { margin: 0 0 .25rem; }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 </head>
 <body>
 <main>
-  <h1>Anything → Markdown</h1>
-  <p class="lead">Drop in documents, get clean Markdown that costs far fewer tokens to feed to an AI.</p>
+  <h1><span class="mono" aria-hidden="true">#</span>Anything → Markdown</h1>
+  <p class="lead">Turn documents into clean Markdown that costs far fewer tokens to give to an AI.</p>
 
   <label id="drop">
     <input id="picker" type="file" multiple>
-    <strong>Drop files here or click to choose</strong>
-    <span>PDF, Word, Excel, PowerPoint, HTML, CSV, JSON, XML, EPUB, ZIP, text and code files</span>
+    <span class="button prominent">Choose files</span>
+    <span class="hint">or drop them anywhere on this page</span>
+    <span class="formats">PDF, Word, Excel, PowerPoint, HTML, CSV, JSON, XML, EPUB, ZIP, text and code</span>
   </label>
-  <p id="status" role="status">Starting…</p>
+
+  <div id="loading">
+    <progress id="progress" max="4" value="0" aria-label="Getting the converter ready"></progress>
+  </div>
+  <p id="status" role="status">Getting the converter ready…</p>
 
   <div class="toolbar" id="toolbar" hidden>
     <span class="total" id="total"></span>
-    <button id="copy-all">Copy all</button>
+    <button id="copy-all" class="prominent">Copy all</button>
     <button id="download-all">Download all</button>
     <button id="clear">Clear</button>
   </div>
   <div id="files"></div>
 
   <footer>
-    Everything runs in your browser — files are never uploaded.
-    Powered by <a href="https://github.com/microsoft/markitdown">Microsoft MarkItDown</a>.
-    Images and audio are not transcribed.
+    <p>Files stay on this device. Nothing is uploaded.</p>
+    <p>Images, audio and scanned pages are not converted.</p>
+    <p>Powered by <a href="https://github.com/microsoft/markitdown">Microsoft MarkItDown</a>.</p>
   </footer>
 </main>
 
@@ -98,11 +146,18 @@
 const $ = (id) => document.getElementById(id);
 const statusEl = $("status"), filesEl = $("files"), drop = $("drop");
 const worker = new Worker("worker.js");
-const items = new Map(); // id -> { name, el, markdown }
-let nextId = 0, pending = 0, engineReady = false;
+const items = new Map(); // id -> { name, size, el, markdown }
+let nextId = 0, pending = 0, engineReady = false, loadStep = 0;
 
 const tokens = (text) => Math.ceil(text.length / 4); // rough estimate
 const fmt = (n) => n.toLocaleString("en-US");
+const plural = (n, word) => `${fmt(n)} ${word}${n === 1 ? "" : "s"}`;
+const byteSize = (text) => new Blob([text]).size;
+function fmtBytes(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
 
 function setStatus(text, isError = false) {
   statusEl.textContent = text;
@@ -112,18 +167,28 @@ function setStatus(text, isError = false) {
 function refresh() {
   const done = [...items.values()].filter((i) => i.markdown);
   $("toolbar").hidden = items.size === 0;
-  const total = done.reduce((sum, i) => sum + tokens(i.markdown), 0);
-  $("total").textContent = done.length
-    ? `${done.length} file${done.length > 1 ? "s" : ""} · ~${fmt(total)} tokens` : "";
-  if (engineReady) {
-    setStatus(pending ? `Converting ${pending} file${pending > 1 ? "s" : ""}…` : "Ready.");
+  $("copy-all").disabled = $("download-all").disabled = done.length === 0;
+  if (done.length) {
+    const before = done.reduce((sum, i) => sum + i.size, 0);
+    const after = done.reduce((sum, i) => sum + byteSize(i.markdown), 0);
+    const total = done.reduce((sum, i) => sum + tokens(i.markdown), 0);
+    $("total").textContent =
+      `${plural(done.length, "file")} · ${fmtBytes(before)} → ${fmtBytes(after)} · about ${plural(total, "token")}`;
+  } else {
+    $("total").textContent = "";
+  }
+  if (!engineReady) {
+    const waiting = pending ? ` ${plural(pending, "file")} will convert as soon as it is ready.` : " You can add files now.";
+    setStatus(`Getting the converter ready, step ${Math.max(loadStep, 1)} of 4. The first visit takes about 10 seconds.${waiting}`);
+  } else {
+    setStatus(pending ? `Converting ${plural(pending, "file")}…` : "");
   }
 }
 
-function button(label, onClick, className = "") {
+function button(label, description, onClick) {
   const b = document.createElement("button");
   b.textContent = label;
-  b.className = className;
+  b.setAttribute("aria-label", description);
   b.addEventListener("click", () => onClick(b));
   return b;
 }
@@ -147,71 +212,107 @@ const mdName = (name) => name.replace(/\.[^.]+$/, "") + ".md";
 const combined = () => [...items.values()].filter((i) => i.markdown)
   .map((i) => `# ${i.name}\n\n${i.markdown}`).join("\n\n---\n\n");
 
+function remove(id) {
+  items.get(id).el.remove();
+  items.delete(id);
+  refresh();
+}
+
 async function addFiles(fileList) {
   for (const file of fileList) {
     const id = nextId++;
     const el = document.createElement("section");
     el.className = "file";
     const header = document.createElement("header");
-    const name = document.createElement("span");
+    const info = document.createElement("div");
+    info.className = "info";
+    const name = document.createElement("div");
     name.className = "name";
     name.textContent = file.name;
-    const meta = document.createElement("span");
+    const meta = document.createElement("div");
     meta.className = "meta";
-    meta.textContent = "Converting…";
-    header.append(name, meta);
+    meta.textContent = engineReady ? "Converting…" : "Waiting for the converter…";
+    info.append(name, meta);
+    header.append(info, button("Remove", `Remove ${file.name}`, () => remove(id)));
     el.append(header);
     filesEl.prepend(el);
-    items.set(id, { name: file.name, el, markdown: null });
+    items.set(id, { name: file.name, size: file.size, el, markdown: null });
     pending++;
+    refresh();
     const buffer = await file.arrayBuffer();
     worker.postMessage({ id, name: file.name, buffer }, [buffer]);
   }
-  refresh();
 }
 
 worker.onmessage = ({ data }) => {
-  if (data.type === "status") return setStatus(data.text);
-  if (data.type === "ready") { engineReady = true; return refresh(); }
+  if (data.type === "status") {
+    loadStep = data.step;
+    $("progress").value = data.step - 0.5;
+    return refresh();
+  }
+  if (data.type === "ready") {
+    engineReady = true;
+    $("loading").hidden = true;
+    for (const item of items.values()) {
+      if (!item.markdown && !item.el.classList.contains("failed")) {
+        item.el.querySelector(".meta").textContent = "Converting…";
+      }
+    }
+    return refresh();
+  }
   if (data.type === "fatal") {
-    return setStatus("Could not load the converter. Check your connection and reload. " + data.error, true);
+    $("loading").hidden = true;
+    console.error(data.error);
+    return setStatus("The converter could not load. Check the internet connection, then reload this page.", true);
   }
   const item = items.get(data.id);
   pending--;
-  if (!item) return refresh(); // cleared while converting
+  if (!item) return refresh(); // removed while converting
   const header = item.el.querySelector("header");
   const meta = item.el.querySelector(".meta");
   if (data.type === "error") {
     item.el.classList.add("failed");
-    meta.textContent = data.error;
+    meta.textContent = "Not converted. " + data.error;
   } else {
     item.markdown = data.markdown;
-    meta.textContent = `~${fmt(tokens(data.markdown))} tokens`;
-    header.append(
-      button("Copy", (b) => copy(item.markdown, b), "primary"),
-      button("Download", () => download(item.markdown, mdName(item.name))),
+    meta.classList.add("mono");
+    meta.textContent =
+      `${fmtBytes(item.size)} → ${fmtBytes(byteSize(data.markdown))} · about ${plural(tokens(data.markdown), "token")}`;
+    header.lastChild.before(
+      button("Copy", `Copy ${item.name} as Markdown`, (b) => copy(item.markdown, b)),
+      button("Download", `Download ${mdName(item.name)}`, () => download(item.markdown, mdName(item.name))),
     );
     const pre = document.createElement("pre");
+    pre.className = "mono";
+    pre.tabIndex = 0; // scrollable region must be reachable by keyboard
+    pre.setAttribute("aria-label", `Markdown for ${item.name}`);
     pre.textContent = data.markdown;
     item.el.append(pre);
   }
   refresh();
 };
-worker.onerror = (e) => setStatus("Converter crashed: " + e.message, true);
+worker.onerror = (e) => {
+  console.error(e.message);
+  setStatus("The converter stopped working. Reload this page and try again.", true);
+};
 
 $("picker").addEventListener("change", (e) => { addFiles(e.target.files); e.target.value = ""; });
 $("copy-all").addEventListener("click", (e) => copy(combined(), e.target));
 $("download-all").addEventListener("click", () => download(combined(), "converted.md"));
 $("clear").addEventListener("click", () => { items.clear(); filesEl.replaceChildren(); refresh(); });
 
-// Accept drops anywhere on the page
-addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+// Accept drops anywhere on the page, but only highlight for files
+const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes("Files");
+addEventListener("dragover", (e) => { if (hasFiles(e)) { e.preventDefault(); drop.classList.add("over"); } });
 addEventListener("dragleave", (e) => { if (!e.relatedTarget) drop.classList.remove("over"); });
 addEventListener("drop", (e) => {
+  if (!hasFiles(e)) return;
   e.preventDefault();
   drop.classList.remove("over");
   addFiles(e.dataTransfer.files);
 });
+
+refresh();
 </script>
 </body>
 </html>
